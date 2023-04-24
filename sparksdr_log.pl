@@ -102,6 +102,8 @@ my $cw_beacon_next = 0;
 my $cw_beacon_last = 0;
 my $cw_beacon_waiting = 0;
 my $init_done = 0;
+my $power = 5;
+my $cmd2send = "";
 
 ############################################################
 # get total arg passed to this script
@@ -110,6 +112,7 @@ my $init_done = 0;
 	my $file_path = ($scriptname =~ /(.*)\/([\w]+).pl/s)? $1 : "undef";
 	$file_path = $file_path . "/";
 	$scriptname = $2;
+
 	my $tm = localtime(time);
 	my $tm_epoc = time();
 	my $tmrenew_epoc = $tm_epoc + $cloudlog_keepalive_sec;
@@ -159,6 +162,7 @@ my $init_done = 0;
 			++$opnn if ($station_callsign[$opnn]);
 			$OpenHABurl = $par if ($1 eq "OpenHABurl");
 			$debug = $par if ($1 eq "debug");
+			$power = $par if ($1 eq "power");
 		}
 		++$nn;
 	}
@@ -166,8 +170,18 @@ my $init_done = 0;
 	$cloudlogApiKey[$cloudlogApiKey_Radio] = "";
 	$station_callsign[$opnn] = "";
 	$station_profile_id[$idnn] = 0;
-	printf "Parameter Key: %s (total: %s) ID: %s URL: %s ws: %sDebug: %s\n",$cloudlogApiKey[1],$cloudlogApiKey_Radio,$station_profile_id[1],$cloudlogApiUrlLog,$websocketcall,$verbose if $verbose;	
+	printf "Parameter Key: %s (total: %s) ID: %s URL: %s ws: %s Debug: %s\n",$cloudlogApiKey[1],$cloudlogApiKey_Radio,$station_profile_id[1],$cloudlogApiUrlLog,$websocketcall,$verbose if $verbose;	
 
+
+	$nn = 1;
+	printf "Valid Station Profiles: \n" if $verbose;
+	while ($station_profile_id[$nn]) {
+		printf " %s with Call %s\n",$station_profile_id[$nn],$station_callsign[$nn] if $verbose;
+		++$nn;
+	}
+	printf "Radio running with %sw\n",$power;
+eval {
+	
 #############################################################
 # Protocol::WebSocket takes a full URL, but IO::Socket::* uses only a host
 #  and port.  This regex section retrieves host/port from URL.
@@ -233,7 +247,7 @@ my $tcp_socket = IO::Socket::SSL->new(
 	say "Trying to create Protocol::WebSocket::Client handler for $websocketcall..." if ($verbose >= 4);
 my $client = Protocol::WebSocket::Client->new(url => $websocketcall);
 	$tm = localtime(time);
-	printf("WebSocket Created: %02d:%02d:%02d am %02d.%02d.%04d\n",$tm->hour, $tm->min, $tm->sec, $tm->mday, $tm->mon,$tm->year+1900) if $verbose;
+	printf("WebSocket Created: %02d:%02d:%02d am %02d.%02d.%04d\n",$tm->hour, $tm->min, $tm->sec, $tm->mday, $tm->mon,$tm->year) if $verbose;
 	++$ws_connect;
 #######################
 #  Set up the various methods for the WS Protocol handler
@@ -254,7 +268,7 @@ my $client = Protocol::WebSocket::Client->new(url => $websocketcall);
 # You may wish to set a global variable here (our $isConnected), or
 #  just put your logic as I did here.  Or nothing at all :)
 		$SparkSDRactive = 1;
-		printf("Successfully connected SparkSDR: %02d:%02d:%02d am %02d.%02d.%04d\n",$tm->hour, $tm->min, $tm->sec, $tm->mday, $tm->mon,$tm->year+1900);
+		printf("Successfully connected SparkSDR: %02d:%02d:%02d am %02d.%02d.%04d\n",$tm->hour, $tm->min, $tm->sec, $tm->mday, $tm->mon,$tm->year);
 		$auto_reboot = 1;
 		}
 	);
@@ -269,7 +283,7 @@ my $client = Protocol::WebSocket::Client->new(url => $websocketcall);
 			say "ERROR ON WEBSOCKET: $buf";
 			$tcp_socket->close;
 			$tm = localtime(time);
-			printf("SparkSDR WebSocket connection terminated finally: %02d:%02d:%02d am %02d.%02d.%04d\n",$tm->hour, $tm->min, $tm->sec, $tm->mday, $tm->mon,$tm->year+1900) if $verbose;
+			printf("SparkSDR WebSocket connection terminated finally: %02d:%02d:%02d am %02d.%02d.%04d\n",$tm->hour, $tm->min, $tm->sec, $tm->mday, $tm->mon,$tm->year) if $verbose;
 			goto Create_socket;
 		}
 	);
@@ -284,7 +298,7 @@ my $client = Protocol::WebSocket::Client->new(url => $websocketcall);
 			my ($buf) = @_;
 
 			$tm = localtime(time) if ($verbose);
-			printf("Time: %02d:%02d:%02d am %02d.%02d.%04d\n",$tm->hour, $tm->min, $tm->sec, $tm->mday, $tm->mon,$tm->year+1900) if ($verbose);
+			printf("Time: %02d:%02d:%02d am %02d.%02d.%04d\n",$tm->hour, $tm->min, $tm->sec, $tm->mday, $tm->mon,$tm->year) if ($verbose);
 			say "Received from socket: '$buf'" if ($verbose  >= 4);
 #### evaluate Buffer
 # Received if version was requested
@@ -349,11 +363,11 @@ my $client = Protocol::WebSocket::Client->new(url => $websocketcall);
 # after a connection has been established, first check the version, has to be 2.0.946 at minimum
 # thereafter get frequency and mode for alle configured receivers
 # see https://perldoc.perl.org/IO::Select re timeout, should be implemented
-	my $cmd2send = GETVERSION;
+	$cmd2send = GETVERSION;
 
 	while (1) {
 		$tm = localtime(time) if ($verbose >= 2);
-		printf("Time: %02d:%02d:%02d am %02d.%02d.%04d\n",$tm->hour, $tm->min, $tm->sec, $tm->mday, $tm->mon,$tm->year+1900) if ($verbose  >= 4);
+		printf("Time: %02d:%02d:%02d am %02d.%02d.%04d\n",$tm->hour, $tm->min, $tm->sec, $tm->mday, $tm->mon,$tm->year) if ($verbose  >= 4);
 		say "Checkpoint 3 WS_keepalive $ws_counter WS_Connect: $ws_connect" if ($verbose  >= 4);
 		++$ws_counter;
 		if ($cmd2send == GETVERSION) {
@@ -384,7 +398,7 @@ my $client = Protocol::WebSocket::Client->new(url => $websocketcall);
 					$client->disconnect;
 					$tcp_socket->close;
 					$tm = localtime(time);
-					printf("SparkSDR WebSocket connection terminated finally: %02d:%02d:%02d am %02d.%02d.%04d\n",$tm->hour, $tm->min, $tm->sec, $tm->mday, $tm->mon,$tm->year+1900) if $verbose;
+					printf("SparkSDR WebSocket connection terminated finally: %02d:%02d:%02d am %02d.%02d.%04d\n",$tm->hour, $tm->min, $tm->sec, $tm->mday, $tm->mon,$tm->year) if $verbose;
 					exit;
 				} 
 				else {
@@ -420,9 +434,11 @@ my $client = Protocol::WebSocket::Client->new(url => $websocketcall);
 			$cmd2send = GETRECEIVERS;
 			$cloudlog_keepalive = 1;
 			$tm = localtime(time);
-			printf("Cloudlog Keepalive: %02d:%02d:%02d am %02d.%02d.%04d\n",$tm->hour, $tm->min, $tm->sec, $tm->mday, $tm->mon,$tm->year+1900);
+			printf("Cloudlog Keepalive: %02d:%02d:%02d am %02d.%02d.%04d\n",$tm->hour, $tm->min, $tm->sec, $tm->mday, $tm->mon,$tm->year);
 		}
 	}
+};	
+
 ## End of Wecksocket routine
 print "Folgender Fehler ist aufgetreten: $@\n" if($@);
 exit_script:
@@ -452,13 +468,14 @@ my $raw_logentry = $_[0];
 	$entry = shift(@array);
 	print "$entry\n" if $verbose;
 
-	@qso_array = split (/,|}/, $entry);
+	@qso_array = split (/{|,\"|}/, $entry);
 	$ii = 0;
 	%QSOtab = ();
 	foreach $item (@qso_array) {
 		$item = trim_quote($item);
 		printf "item %s [$item]\n",$ii if ($verbose);
-		$tag = ($item =~ /\"([\w]+)\"\:\"(.*)\"/)? $1 : "undef";
+
+		$tag = ($item =~ /([\w]+)\:(.*)/)? $1 : "undef";
 # Workaround, löschen sobald in SparkSDR gefixt			
 		$tag = "rst_rcvd" if ($tag eq "rst_received"); # typo in SparkSDR, remove, if solved
 # Workaround, löschen sobald in SparkSDR gefixt			
@@ -475,14 +492,14 @@ my $raw_logentry = $_[0];
 		print "Error QSO not accepted (Call || Freq/Band || RST missing)\n";
 		return (-1);
 	}
-# HL2 has max 5w without PA, delete or comment if you do not want this
+# HL2 has max 5w without PA, change in config if necessary
 	if (not exists($QSOtab{'tx_pwr'})) {
-		$QSOtab{'tx_pwr'}[0] = 1;
-		$QSOtab{'tx_pwr'}[1] = '5';
+		$QSOtab{'tx_pwr'}[0] = length($power);
+		$QSOtab{'tx_pwr'}[1] = $power;
 		$QSOtab{'tx_pwr'}[2] = 1;
 		++$ii;
 	}	
-# HL2 has max 5w without PA, delete or comment if you do not want this
+# HL2 has max 5w without PA, change in config if necessary
 
 	$nn = 1;
 	if (exists($QSOtab{'station_callsign'})) {
@@ -691,7 +708,7 @@ my $radio = "";
 sub trim_quote {
 	my $string = $_[0];
 	$string = shift;
-	$string =~ s/\"//;
+	$string =~ s/\"//g;
 	return $string;
 }
 
