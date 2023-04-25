@@ -12,7 +12,7 @@
 use v5.014;
 use warnings;
 use Time::Piece;
-my $version = "1.10";
+my $version = "1.20";
 
 # WebSocket source taken from:
 # Perl WebSocket test client
@@ -72,8 +72,8 @@ my $entry;
 my $ws_counter = 0;
 my $ws_connect = 0;
 my $cloudlogApiKeyWR = "";
-my @cloudlogApiKey;
-my $cloudlogApiKey_Radio = 0;
+my $cloudlogApiKeyRO = "";
+my $cloudlogRadios = 0;
 my $cloudlog_keepalive = 0;
 my $cloudlog_keepalive_sec = 600;
 my @station_profile_id;
@@ -104,6 +104,7 @@ my $cw_beacon_waiting = 0;
 my $init_done = 0;
 my $power = 5;
 my $cmd2send = "";
+my $no_log = 0;
 
 ############################################################
 # get total arg passed to this script
@@ -129,6 +130,11 @@ my $cmd2send = "";
 			$verbose = substr($a,2,1);
 			print "Debug On, Level: $verbose\n" if $verbose;
 		}
+		if (substr($a,0,2) eq "no") {
+			$no_log = 1;
+			$verbose = 1 if (!$verbose);
+			print "Log Data will not be sent\n" if $verbose;
+		}
 	}
 	print "Total args passed to $scriptname : $total \n" if $verbose;
 
@@ -144,14 +150,13 @@ my $cmd2send = "";
 	$idnn = 1;
 	$opnn = 1;
 
-	$cloudlogApiKey_Radio = 1;
 	foreach $entry (@array) {
 		if ((substr($entry,0,1) ne "#") && (substr($entry,0,1) ne "")) {
 			printf "%d [%s]\n",$nn,$entry if ($verbose >= 4);
 			$par = ($entry =~ /([\w]+).*\=.*\"(.*)\"/s)? $2 : "undef";
 			$cloudlogApiKeyWR = $par if ($1 eq "cloudlogApiKeyWR");
-			$cloudlogApiKey[$cloudlogApiKey_Radio] = $par if ($1 eq "cloudlogApiKey");
-			++$cloudlogApiKey_Radio if ($cloudlogApiKey[$cloudlogApiKey_Radio]);
+			$cloudlogApiKeyRO = $par if ($1 eq "cloudlogApiKeyRO");
+			$cloudlogRadios =  $par if ($1 eq "cloudlogRadios");
 			$cloudlogApiUrlLog = $par if ($1 eq "cloudlogApiUrlLog");
 			$cloudlogApiUrlFreq = $par if ($1 eq "cloudlogApiUrlFreq");
 			$cloudlogRadioId = $par if ($1 eq "cloudlogRadioId");			
@@ -167,10 +172,9 @@ my $cmd2send = "";
 		++$nn;
 	}
 	$verbose = $debug if (!$verbose);
-	$cloudlogApiKey[$cloudlogApiKey_Radio] = "";
 	$station_callsign[$opnn] = "";
 	$station_profile_id[$idnn] = 0;
-	printf "Parameter Key: %s (total: %s) ID: %s URL: %s ws: %s Debug: %s\n",$cloudlogApiKey[1],$cloudlogApiKey_Radio,$station_profile_id[1],$cloudlogApiUrlLog,$websocketcall,$verbose if $verbose;	
+	printf "Parameter Key: %s (total: %s) ID: %s URL: %s ws: %sDebug: %s\n",$cloudlogApiKeyRO,$cloudlogRadios,$station_profile_id[1],$cloudlogApiUrlLog,$websocketcall,$verbose if $verbose;	
 
 
 	$nn = 1;
@@ -231,7 +235,7 @@ my $tcp_socket = IO::Socket::SSL->new(
 	print "Failed to connect to socket: $@, now waiting 60s\n";
 	$time_failed = localtime(time) if (!$SparkSDRactive_counter);
 	if (!$SparkSDRactive) {
-		check_reboot($SparkSDRactive_counter,2);
+		print "SparkSDR not responding\n";
 	}	
 ############################
 	
@@ -610,9 +614,9 @@ my $ii;
 	$radioid = $fieldtab{"ID"}[0] + 1 if (exists($fieldtab{"ID"})) ;
 	$mode = $fieldtab{"Mode"}[0] if (exists($fieldtab{"Mode"})) ;
 
-	if ($radioid < $cloudlogApiKey_Radio) {
+	if ($radioid <= $cloudlogRadios) {
 		printf "Radio %s on %s in %s\n",$radioid,$frequency,$mode if (!$cloudlog_keepalive && ($init_done));
-		printf "start send_info_to_cloudlog / OpenHAB for radio $radioid (max is %s)\n",$cloudlogApiKey_Radio-1 if ($verbose > 1);
+		printf "start send_info_to_cloudlog / OpenHAB for radio $radioid (max is %s)\n",$cloudlogRadios if ($verbose > 1);
 # send info to OpenHAB, if configured
 		if ($OpenHABurl ne "") {
 			$httprequest = sprintf("curl --silent --insecure %s%d=%s%%20%s",$OpenHABurl,$radioid,$frequency,$mode);
@@ -621,11 +625,11 @@ my $ii;
 		}	
 # send info to Cloudlog
 		my $rigID = $cloudlogRadioId . $radioid;
-		my $apistring_fix = sprintf("{\\\"key\\\":\\\"%s\\\",\\\"radio\\\":\\\"%s\\\",\\\"frequency\\\":\\\"%s\\\",\\\"mode\\\":\\\"%s\\\"}",$cloudlogApiKey[$radioid],$rigID,$frequency,$mode);
+		my $apistring_fix = sprintf("{\\\"key\\\":\\\"%s\\\",\\\"radio\\\":\\\"%s\\\",\\\"frequency\\\":\\\"%s\\\",\\\"mode\\\":\\\"%s\\\"}",$cloudlogApiKeyRO,$rigID,$frequency,$mode);
 		send_info_to_cloudlog($apistring_fix,$cloudlogApiUrlFreq);
 	}
 	else {
-		printf "nothing sent, ReceiverID to high (%s > %s)\n",$radioid,$cloudlogApiKey_Radio-1 if ($verbose > 1);
+		printf "nothing sent, ReceiverID to high (%s > %s)\n",$radioid,$cloudlogRadios if ($verbose > 1);
 	}
 }
 
@@ -640,8 +644,8 @@ my $apicall;
 		print $apicall;
 	}
 	else {	
-		print $apicall if ($verbose > 1);
-		`$apicall`;
+		print $apicall if (($verbose > 1) || $no_log);
+		`$apicall` if (!$no_log)
 	}	
 }
 
