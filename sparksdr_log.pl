@@ -12,7 +12,7 @@
 use v5.014;
 use warnings;
 use Time::Piece;
-my $version = "1.20";
+my $version = "1.21";
 
 # WebSocket source taken from:
 # Perl WebSocket test client
@@ -105,6 +105,9 @@ my $init_done = 0;
 my $power = 5;
 my $cmd2send = "";
 my $no_log = 0;
+
+my $client;
+my $tcp_socket;
 
 ############################################################
 # get total arg passed to this script
@@ -223,7 +226,7 @@ create_socket:
 # create a connecting socket
 #  SSL_startHandshake is dependent on the protocol: this lets us use one socket
 #  to work with either SSL or non-SSL sockets.
-my $tcp_socket = IO::Socket::SSL->new(
+   $tcp_socket = IO::Socket::SSL->new(
 	PeerAddr => $host,
 	PeerPort => "$proto($port)",
 	Proto => 'tcp',
@@ -249,7 +252,7 @@ my $tcp_socket = IO::Socket::SSL->new(
 #  this doesn't actually "do" anything with the socket:
 #  it just encodes / decode WebSocket messages.  We have to send them ourselves.
 	say "Trying to create Protocol::WebSocket::Client handler for $websocketcall..." if ($verbose >= 4);
-my $client = Protocol::WebSocket::Client->new(url => $websocketcall);
+   $client = Protocol::WebSocket::Client->new(url => $websocketcall);
 	$tm = localtime(time);
 	printf("WebSocket Created: %02d:%02d:%02d am %02d.%02d.%04d\n",$tm->hour, $tm->min, $tm->sec, $tm->mday, $tm->mon,$tm->year) if $verbose;
 	++$ws_connect;
@@ -363,8 +366,8 @@ my $client = Protocol::WebSocket::Client->new(url => $websocketcall);
 
 # Create a Socket Set for Select.
 #  We can then test this in a loop to see if we should call read.
-	my $set = IO::Select->new($tcp_socket, \*STDIN);
-# after a connection has been established, first check the version, has to be 2.0.946 at minimum
+	my $set = IO::Select->new($tcp_socket);
+# after a connection has been established, first check the version, has to be 2.0.947 at minimum
 # thereafter get frequency and mode for alle configured receivers
 # see https://perldoc.perl.org/IO::Select re timeout, should be implemented
 	$cmd2send = GETVERSION;
@@ -393,41 +396,24 @@ my $client = Protocol::WebSocket::Client->new(url => $websocketcall);
 			my $bytes_read = sysread $ready_socket, $recv_data, 16384;
 
 			# handler by socket type
-			if ($ready_socket == \*STDIN) {
-			# Input from user (keyboard, cat, etc)
-				if (!defined $bytes_read) { die "Error reading from STDIN: $!" }
-				elsif ($bytes_read == 0) {
-				# STDIN closed (ctrl+D or EOF)
-					say "Connection terminated by user, sending disconnect to remote.";
-					$client->disconnect;
-					$tcp_socket->close;
-					$tm = localtime(time);
-					printf("SparkSDR WebSocket connection terminated finally: %02d:%02d:%02d am %02d.%02d.%04d\n",$tm->hour, $tm->min, $tm->sec, $tm->mday, $tm->mon,$tm->year) if $verbose;
-					exit;
-				} 
-				else {
-					chomp $recv_data;
-					$client->write($recv_data);
-				}
+			# Input arrived from remote WebSocket!
+			if (!defined $bytes_read) {
+				print "Error reading from tcp_socket: $! Trying to start again after 15s...";
+				$SparkSDRactive = 0;
+				sleep 15;
+				goto create_socket;
+			}
+			elsif ($bytes_read == 0) {
+			# Remote socket closed
+				say "Connection terminated by remote.";
+				print "0 Byte received. Start again after 15s\n\n";
+				$SparkSDRactive = 0;
+				sleep 15;
+				goto create_socket;
 			} 
 			else {
-			# Input arrived from remote WebSocket!
-				if (!defined $bytes_read) {
-					print "Error reading from tcp_socket: $!";
-					goto exit_script;
-				}
-				elsif ($bytes_read == 0) {
-				# Remote socket closed
-					say "Connection terminated by remote.";
-					print "0 Byte received Start again\n\n";
-					$SparkSDRactive = 0;
-					sleep 15;
-					goto create_socket;
-				} 
-				else {
-				# unpack response - this triggers any handler if a complete packet is read.
-					$client->read($recv_data);
-				}
+			# unpack response - this triggers any handler if a complete packet is read.
+				$client->read($recv_data);
 			}
 		}
 # check Cloudlog keepalive & send send radio data every 10min
@@ -447,7 +433,7 @@ my $client = Protocol::WebSocket::Client->new(url => $websocketcall);
 print "Folgender Fehler ist aufgetreten: $@\n" if($@);
 exit_script:
 	$tm = localtime(time);
-	printf("SparkSDR_ctrl [v$version] exits @ %02d:%02d:%02d am %02d.%02d.%04d\n",$tm->hour, $tm->min, $tm->sec, $tm->mday, $tm->mon,$tm->year);
+	printf("SparkSDR_log [v$version] exits @ %02d:%02d:%02d am %02d.%02d.%04d\n",$tm->hour, $tm->min, $tm->sec, $tm->mday, $tm->mon,$tm->year);
 #################### routines which use the data received via Websocket
 
 sub sparksdr2cloudlog {
@@ -568,7 +554,15 @@ my $host = "";
 			$version = $item if ($1 eq "HostVersion");
 		}	
 	}
-	printf "%s with %s\n",$host,$version;
+# minimum version for reliable websocket is 2.0.947
+	$version =~ /([\d]+)\.([\d]+)\.([\d]+)./;
+	if (($1 < 2) || (($1 == 2) && ($2 == 0) && ($3 < 947))) {
+		printf "%s with %s is not supported, minimum version is 2.0.947.0\n",$host,$version;
+		quit_script();
+	}
+	else {	
+		printf "%s with %s\n",$host,$version;
+	}	
 # at script start first the version is  read (Logdata are only send if version is >=2.0.946.0
 # after that, initially all frequency and modes are collected
 	$cmd2send = GETRECEIVERS;
@@ -598,12 +592,12 @@ my $ii;
 	@array = split (/,|}/, $_[0]);
 	$ii = 0;
 	foreach $entry (@array) {
-		printf "Nr: %s, Entry: %s\n",$ii,$entry if ($verbose  >= 3);
+		printf "Nr: %s, Entry: %s\n",$ii,$entry if ($verbose  >= 4);
 		$item = ($entry =~ /\"([\w]+)\"\:[\"]*(.*)[\"]*/)? $1 : "undef";
 		$item = trim_quote($item);
 		if ($item ne "undef") {
 			push @{$fieldtab{$item}}, trim_quote($2);
-			printf "Nr: %s, Item: %s, Inhalt: %s\n",$ii,$item,$fieldtab{$item}[0] if ($verbose  >= 3);
+			printf "Nr: %s, Item: %s, Inhalt: %s\n",$ii,$item,$fieldtab{$item}[0] if ($verbose  >= 4);
 			++$ii;
 		}
 	}	
@@ -662,13 +656,15 @@ my $nn = 0;
 	++$nn;
 	$entry = shift(@array);
 	print "$nn: $entry \n" if ($verbose > 3);
-	@array = split (/}/, $entry);
 	$nn = 0;
-	foreach $entry (@array) {
-		printf "$nn [%s}]\n",substr($entry,1,length($entry)-1) if ($verbose > 3);
-		ReceiverResponse(substr($entry,1,length($entry)-1));
-		++$nn;
-	}	
+	if (defined $entry) {
+		@array = split (/}/, $entry);
+		foreach $entry (@array) {
+			printf "$nn [%s}]\n",substr($entry,1,length($entry)-1) if ($verbose > 3);
+			ReceiverResponse(substr($entry,1,length($entry)-1));
+			++$nn;
+		}	
+	}
 	$cloudlog_keepalive = 0 if $cloudlog_keepalive;
 	if (!$init_done) {
 		print "SparkSDR Cloudlog Connector [v$version] Init done, running\n";
@@ -700,7 +696,8 @@ my $radio = "";
 	printf "%s with state running:%s, SparkSDR ",$radio,$state;
 	if ($state eq "true") {
 		$SparkSDRactive = 1;
-		print "online\n";
+		print "online\nnow getting receivers\n";
+		$cmd2send = GETRECEIVERS;
 	}
 	else {
 		$SparkSDRactive = 0;	
@@ -714,5 +711,13 @@ sub trim_quote {
 	$string = shift;
 	$string =~ s/\"//g;
 	return $string;
+}
+
+sub quit_script {
+	$client->disconnect;
+	$tcp_socket->close;
+	$tm = localtime(time);
+	printf("SparkSDR WebSocket connection terminated finally: %02d:%02d:%02d am %02d.%02d.%04d\n",$tm->hour, $tm->min, $tm->sec, $tm->mday, $tm->mon,$tm->year);
+	exit;
 }
 
