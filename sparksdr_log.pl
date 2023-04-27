@@ -12,7 +12,7 @@
 use v5.014;
 use warnings;
 use Time::Piece;
-my $version = "1.21";
+my $version = "1.31";
 
 # WebSocket source taken from:
 # Perl WebSocket test client
@@ -73,7 +73,8 @@ my $ws_counter = 0;
 my $ws_connect = 0;
 my $cloudlogApiKeyWR = "";
 my $cloudlogApiKeyRO = "";
-my $cloudlogRadios = 0;
+my $cloudlogReceiver = 0;
+my $cloudlogRecv2show = 5;
 my $cloudlog_keepalive = 0;
 my $cloudlog_keepalive_sec = 600;
 my @station_profile_id;
@@ -84,6 +85,9 @@ my $cloudlogRadioId;
 my $cloudlogApiUrlLog = "";
 my $cloudlogApiUrlFreq = "";
 my $OpenHABurl="";
+my $recv_id = 0;
+my $max_recv_id = 0;
+my %RECVtab;
 my $par;
 my $websocketcall = "";
 my $data = "";
@@ -159,7 +163,7 @@ my $tcp_socket;
 			$par = ($entry =~ /([\w]+).*\=.*\"(.*)\"/s)? $2 : "undef";
 			$cloudlogApiKeyWR = $par if ($1 eq "cloudlogApiKeyWR");
 			$cloudlogApiKeyRO = $par if ($1 eq "cloudlogApiKeyRO");
-			$cloudlogRadios =  $par if ($1 eq "cloudlogRadios");
+			$cloudlogRecv2show =  $par if ($1 eq "cloudlogRecv2show");
 			$cloudlogApiUrlLog = $par if ($1 eq "cloudlogApiUrlLog");
 			$cloudlogApiUrlFreq = $par if ($1 eq "cloudlogApiUrlFreq");
 			$cloudlogRadioId = $par if ($1 eq "cloudlogRadioId");			
@@ -177,7 +181,7 @@ my $tcp_socket;
 	$verbose = $debug if (!$verbose);
 	$station_callsign[$opnn] = "";
 	$station_profile_id[$idnn] = 0;
-	printf "Parameter Key: %s (total: %s) ID: %s URL: %s ws: %sDebug: %s\n",$cloudlogApiKeyRO,$cloudlogRadios,$station_profile_id[1],$cloudlogApiUrlLog,$websocketcall,$verbose if $verbose;	
+	printf "Parameter Key: %s (total: %s) ID: %s URL: %s ws: %sDebug: %s\n",$cloudlogApiKeyRO,$cloudlogReceiver,$station_profile_id[1],$cloudlogApiUrlLog,$websocketcall,$verbose if $verbose;	
 
 
 	$nn = 1;
@@ -305,7 +309,7 @@ create_socket:
 			my ($buf) = @_;
 
 			$tm = localtime(time) if ($verbose);
-			printf("Time: %02d:%02d:%02d am %02d.%02d.%04d\n",$tm->hour, $tm->min, $tm->sec, $tm->mday, $tm->mon,$tm->year) if ($verbose);
+			printf("Time: %02d:%02d:%02d am %02d.%02d.%04d\n",$tm->hour, $tm->min, $tm->sec, $tm->mday, $tm->mon,$tm->year) if ($verbose >= 4);
 			say "Received from socket: '$buf'" if ($verbose  >= 4);
 #### evaluate Buffer
 # Received if version was requested
@@ -576,19 +580,20 @@ my %fieldtab;
 my $entry;
 my $item = "";
 my $cmd = "";
-my $radioid = "";
 my $mode = "";
 my $frequency = "";
 my $qso = 0;
 my $httprequest = "";
 my $tag;
 my $ii;
+my $recv_buffer = "";
 	
 	print "start ReceiverResponse\n" if ($verbose > 1);
 	printf "Response: %s\n",$_[0] if ($verbose  >= 3);
 	
 	return if !$SparkSDRactive;
 	
+	$recv_buffer = $_[0];
 	@array = split (/,|}/, $_[0]);
 	$ii = 0;
 	foreach $entry (@array) {
@@ -605,26 +610,78 @@ my $ii;
 		$fieldtab{"Frequency"}[0] =~ s/([\d]+).0/$1/ ;
 		$frequency = $fieldtab{"Frequency"}[0];
 	}	
-	$radioid = $fieldtab{"ID"}[0] + 1 if (exists($fieldtab{"ID"})) ;
-	$mode = $fieldtab{"Mode"}[0] if (exists($fieldtab{"Mode"})) ;
+	$recv_id = $fieldtab{"ID"}[0] if (exists($fieldtab{"ID"}));
+	$mode = $fieldtab{"Mode"}[0] if (exists($fieldtab{"Mode"}));
+	
+	if ($recv_id > $max_recv_id) {
+		$max_recv_id = $recv_id;
+	}
+	
+	if (exists $RECVtab{$recv_id}{BUFFER}) {
+		if ($RECVtab{$recv_id}{ACTIVE}) {
+			if ($RECVtab{$recv_id}{BUFFER} eq $recv_buffer) {
+				printf "Buffer for radio %s not changed (cl radio %s)\n",$recv_id,$cloudlogReceiver if ($verbose > 1);
+				$RECVtab{$recv_id}{BUFFCHG} = 0;
+			} else {
+				$RECVtab{$recv_id}{BUFFER} = $recv_buffer;
+				$RECVtab{$recv_id}{BUFFCHG} = 1;
+			}
+		}
+		else {
+			printf "inactive receiver found %s, set ACTIVE\n",$recv_id if ($verbose > 1);
+			$RECVtab{$recv_id}{ACTIVE} = 1;
+			if ($RECVtab{$recv_id}{BUFFER} eq $recv_buffer) {
+				printf "Buffer for radio %s not changed (cl radio %s)\n",$recv_id,$cloudlogReceiver if ($verbose > 1);
+				$RECVtab{$recv_id}{BUFFCHG} = 0;
+			} else {
+				$RECVtab{$recv_id}{BUFFER} = $recv_buffer;
+				$RECVtab{$recv_id}{BUFFCHG} = 1;
+			}
+		}
+	} 
+	else {
+		$RECVtab{$recv_id}{BUFFER} = $recv_buffer;
+		$RECVtab{$recv_id}{ACTIVE} = 1;
+		$RECVtab{$recv_id}{BUFFCHG} = 1;
+		printf "New receiver found (recv_id %s) and set active\n",$recv_id if ($verbose > 1);
+	}	
+	printf "++++++++++++++++++++++++++\nList all Receivers\n" if ($verbose > 1);
+	my $nn = 0;
+	$cloudlogReceiver=0;
+	while ($nn <= $max_recv_id) {
+		if (exists $RECVtab{$nn}{ACTIVE}) {
+			if ($RECVtab{$nn}{ACTIVE}) {
+				++$cloudlogReceiver;
+				$RECVtab{$nn}{CL_R_ID} = $cloudlogReceiver;
+				printf "Receiver %s, CLR: %s Active: %s  %s\n",$nn,$RECVtab{$nn}{CL_R_ID},$RECVtab{$nn}{ACTIVE},$RECVtab{$nn}{BUFFER} if ($verbose > 1);
+			}
+			else {
+				$RECVtab{$nn}{CL_R_ID} = 0;
+			}
+		}
+		++$nn;
+	}	
+	printf "++++++++++++++++++++++++++\n" if ($verbose > 1);
 
-	if ($radioid <= $cloudlogRadios) {
-		printf "Radio %s on %s in %s\n",$radioid,$frequency,$mode if (!$cloudlog_keepalive && ($init_done));
-		printf "start send_info_to_cloudlog / OpenHAB for radio $radioid (max is %s)\n",$cloudlogRadios if ($verbose > 1);
+	if (($RECVtab{$recv_id}{ACTIVE}) && ($RECVtab{$recv_id}{CL_R_ID} <= $cloudlogRecv2show)) {
+		printf "Receiver %s on %s in %s\n",$recv_id,$frequency,$mode if (!$cloudlog_keepalive && ($init_done));
+#		printf "start send_info_to_cloudlog / OpenHAB for receiver $recv_id (max is %s)\n",$cloudlogReceiver if ($verbose > 1);
 # send info to OpenHAB, if configured
 		if ($OpenHABurl ne "") {
-			$httprequest = sprintf("curl --silent --insecure %s%d=%s%%20%s",$OpenHABurl,$radioid,$frequency,$mode);
+			$httprequest = sprintf("curl --silent --insecure %s%d=%s%%20%s",$OpenHABurl,$recv_id,$frequency,$mode);
 			print "[$httprequest]\n" if ($verbose > 1);
-			`$httprequest`;
+			`$httprequest` if (!$no_log);
 		}	
 # send info to Cloudlog
-		my $rigID = $cloudlogRadioId . $radioid;
+		my $rigID = $cloudlogRadioId . $RECVtab{$recv_id}{CL_R_ID};
 		my $apistring_fix = sprintf("{\\\"key\\\":\\\"%s\\\",\\\"radio\\\":\\\"%s\\\",\\\"frequency\\\":\\\"%s\\\",\\\"mode\\\":\\\"%s\\\"}",$cloudlogApiKeyRO,$rigID,$frequency,$mode);
+		printf "Receiver found, active & sent. ReceiverID %s, Receiver # %s\n",$recv_id,$RECVtab{$recv_id}{CL_R_ID} if ($verbose > 1);
 		send_info_to_cloudlog($apistring_fix,$cloudlogApiUrlFreq);
 	}
 	else {
-		printf "nothing sent, ReceiverID to high (%s > %s)\n",$radioid,$cloudlogRadios if ($verbose > 1);
+		printf "nothing sent, Receiver inactive or ReceiverNumber higher than configrued maximum (R:%s > C:%s)\n",$RECVtab{$recv_id}{CL_R_ID},$cloudlogRecv2show if ($verbose > 1);
 	}
+	printf "\n\n" if ($verbose > 1);
 }
 
 sub send_info_to_cloudlog {
@@ -638,6 +695,7 @@ my $apicall;
 		print $apicall;
 	}
 	else {	
+		print "Test, not sent: " if ($no_log);
 		print $apicall if (($verbose > 1) || $no_log);
 		`$apicall` if (!$no_log)
 	}	
@@ -647,7 +705,22 @@ sub getReceiversResponse {
 my @array;
 my $entry;
 my $nn = 0;
+my $recv_id = 0;
+	
 	print "start getReceiversResponse\n" if ($verbose > 1);
+	$recv_id = 0;
+### new receiverList, set all to inactive, so that only the newly received creceivers are active after this
+	while ($recv_id <= $max_recv_id) {
+		if (exists $RECVtab{$recv_id}{ACTIVE}) {
+			$RECVtab{$recv_id}{ACTIVE} = 0;
+			printf "Receiver %s set to inactive\n",$recv_id if ($verbose > 1);
+		}
+		++$recv_id;
+	}	
+
+	$max_recv_id = 0;
+	$cloudlogReceiver = 0;
+	printf "# of Receivers 0, current_max: %s\n",$max_recv_id if ($verbose > 1);
 	printf "Receivers: %s\n",$_[0] if ($verbose > 1);
 
 	@array = split (/:\[|\]}/, $_[0]);
@@ -665,6 +738,26 @@ my $nn = 0;
 			++$nn;
 		}	
 	}
+	
+### make sure, new list has cloudlogRadios ascending without gaps
+	printf "======================================\nList all Receivers\n" if ($verbose > 1);
+	$nn = 0;
+	$cloudlogReceiver=0;
+	while ($nn <= $max_recv_id) {
+		if (exists $RECVtab{$nn}{ACTIVE}) {
+			if ($RECVtab{$nn}{ACTIVE}) {
+				++$cloudlogReceiver;
+				$RECVtab{$nn}{CL_R_ID} = $cloudlogReceiver;
+				printf "Receiver %s, CLR: %s Active: %s  %s\n",$nn,$RECVtab{$nn}{CL_R_ID},$RECVtab{$nn}{ACTIVE},$RECVtab{$nn}{BUFFER} if ($verbose > 1);
+			}
+			else {
+				$RECVtab{$nn}{CL_R_ID} = 0;
+			}
+		}
+		++$nn;
+	}	
+	printf "======================================\n\n\n" if ($verbose > 1);
+		
 	$cloudlog_keepalive = 0 if $cloudlog_keepalive;
 	if (!$init_done) {
 		print "SparkSDR Cloudlog Connector [v$version] Init done, running\n";
