@@ -607,7 +607,7 @@ my $recv_buffer = "";
 		}
 	}	
 	if (exists($fieldtab{"Frequency"})) {
-		$fieldtab{"Frequency"}[0] =~ s/([\d]+).0/$1/ ;
+#		$fieldtab{"Frequency"}[0] =~ s/([\d]+).0/$1/ ;
 		$frequency = $fieldtab{"Frequency"}[0];
 	}	
 	$recv_id = $fieldtab{"ID"}[0] if (exists($fieldtab{"ID"}));
